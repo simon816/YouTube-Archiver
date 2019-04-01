@@ -4,10 +4,11 @@ import html
 import subprocess
 import signal
 import re
+import time
 
 from concurrent.futures import ThreadPoolExecutor
 from queue import Queue, Empty
-from threading import Thread
+from threading import Thread, Semaphore
 
 class RuleLogic:
 
@@ -180,11 +181,11 @@ class Profile:
             'rules': [rule.json() for rule in self.rules]
         }
 
-    def resume(self, global_rules):
+    def get_filtered_videos(self, global_rules):
         all_rules = global_rules + self.rules
         for rule in all_rules:
             if rule.reject_profile(self):
-                return
+                return []
         for video in self.videos.values():
             allow = True
             for rule in all_rules:
@@ -192,7 +193,11 @@ class Profile:
                     allow = False
                     break
             if allow:
-                video.fetch()
+                yield video
+
+    def resume(self, global_rules):
+        for video in self.get_filtered_videos(global_rules):
+            video.fetch()
 
     def add_job(self, job):
         self.coordinator.add_job(job)
@@ -244,7 +249,7 @@ class Video:
             import traceback
             logqueue.put(traceback.format_exc())
 
-    def _download0(self, logqueue, processlist):
+    def _download0(self, logqueue, processlist, callback):
         logqueue.put("Begin " + self.id)
         outfmt = r'Videos/%(uploader)s/%(upload_date)s - %(title)s - %(id)s.%(ext)s'
         url = 'https://www.youtube.com/watch?v=%s' % self.id
@@ -276,6 +281,7 @@ class Video:
                 'filename': fn,
                 'metadata': ret
             }
+            callback(self)
         else:
             logqueue.put("Process error: " + errs)
 
@@ -337,16 +343,21 @@ class Coordinator:
         self.logqueue = Queue()
         self.running = True
         logthread = Thread(target=self.logprint)
-        self.pool = ThreadPoolExecutor(max_workers=4)
+        savethread = Thread(target=self.state_saver_thread)
+        self.pool = ThreadPoolExecutor(max_workers=3)
         self.futures = []
         self.processlist = []
+        self.state_dirty = False
+        self.dirty_lock = Semaphore()
         logthread.start()
+        savethread.start()
         for profile in self.profiles.values():
             profile.resume(self.rules)
         self.pool.shutdown()
         self.logqueue.join()
         self.running = False
         logthread.join()
+        savethread.join()
         self.save_state()
 
     def interrupt(self, sig, stack):
@@ -369,9 +380,27 @@ class Coordinator:
             except Empty:
                 pass
 
+    def state_saver_thread(self):
+        while self.running:
+            try:
+                self.dirty_lock.acquire()
+                if self.state_dirty:
+                    self.state_dirty = False
+                    self.save_state()
+            finally:
+                self.dirty_lock.release()
+            time.sleep(5)
+
+    def success_cb(self, video):
+        try:
+            self.dirty_lock.acquire()
+            self.state_dirty = True
+        finally:
+            self.dirty_lock.release()
+
     def add_job(self, job):
         self.futures.append(self.pool.submit(job._download, self.logqueue,
-                                             self.processlist))
+                                             self.processlist, self.success_cb))
 
 if __name__ == '__main__':
     app = Coordinator('state.json')

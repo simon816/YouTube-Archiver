@@ -55,6 +55,13 @@ def run_cmd(coordinator, cmd):
             place_to_rem = coordinator.profiles[where]
         place_to_rem.remove_rule(idx)
         coordinator.save_state()
+    elif cmd == 'getdone' or cmd == 'gettodo':
+        for profile in coordinator.get_profiles():
+            for vid in profile.get_filtered_videos(coordinator.get_rules()):
+                if vid.video_data is not None and cmd == 'getdone':
+                    print(vid.video_data['filename'])
+                elif vid.video_data is None and cmd == 'gettodo':
+                    print(vid.id, vid.title)
     else:
         assert False
 
