@@ -336,7 +336,7 @@ class Coordinator:
         self.logqueue = Queue()
         self.running = True
         logthread = Thread(target=self.logprint)
-        self.pool = ThreadPoolExecutor(max_workers=1)
+        self.pool = ThreadPoolExecutor(max_workers=4)
         self.futures = []
         self.processlist = []
         logthread.start()
