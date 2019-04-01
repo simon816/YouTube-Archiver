@@ -62,6 +62,28 @@ def run_cmd(coordinator, cmd):
                     print(vid.video_data['filename'])
                 elif vid.video_data is None and cmd == 'gettodo':
                     print(vid.id, vid.title)
+    elif cmd == 'stat':
+        total_size = 0
+        count = 0
+        total_dur = 0
+        for profile in coordinator.get_profiles():
+            for vid in profile.get_videos():
+                if not vid.video_data:
+                    continue
+                path = vid.video_data['filename']
+                dur = vid.video_data['metadata']['duration']
+                size = os.path.getsize(path)
+                count += 1
+                total_size += size
+                total_dur += dur
+        def dur_str(seconds):
+            return '%d:%d' % divmod(seconds, 60)
+        print(('Total size: %.1fGB, count: %d, avg: %.1fMB, Total duration: %s' \
+              + ', avg duration: %s')% (
+            total_size / 1024 / 1024 / 1024,
+            count,
+            (total_size / count) / 1024 / 1024, dur_str(total_dur),
+            dur_str(total_dur // count)))
     else:
         assert False
 
@@ -69,8 +91,12 @@ def run_cmd(coordinator, cmd):
 if __name__ == '__main__':
     coordinator = Coordinator('state.json')
     coordinator.load_state()
-    while True:
-        cmd = input('db > ')
-        if cmd in ['q', 'exit', 'quit']:
-            break
-        run_cmd(coordinator, cmd)
+    import sys
+    if len(sys.argv) > 1:
+        run_cmd(coordinator, ' '.join(sys.argv[1:]))
+    else:
+        while True:
+            cmd = input('db > ')
+            if cmd in ['q', 'exit', 'quit']:
+                break
+            run_cmd(coordinator, cmd)
