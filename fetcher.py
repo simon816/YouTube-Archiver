@@ -237,9 +237,9 @@ class Video:
             return
         self.profile.add_job(self)
 
-    def _download(self, *args):
+    def _download(self, logqueue, *args):
         try:
-            self._download0(*args)
+            self._download0(logqueue, *args)
         except:
             import traceback
             logqueue.put(traceback.format_exc())
