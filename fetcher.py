@@ -252,13 +252,14 @@ class Video:
     def _download0(self, logqueue, processlist, callback):
         logqueue.put("Begin " + self.id)
         outfmt = r'Videos/%(uploader)s/%(upload_date)s - %(title)s - %(id)s.%(ext)s'
+        fmt = 'bestvideo[height <=? 1080]+bestaudio/best[height <=? 1080]/best'
         url = 'https://www.youtube.com/watch?v=%s' % self.id
         p = subprocess.Popen(['youtube-dl',
                 '--print-json',
                 '--cache-dir', './yt-dl-cache/',
                 '--no-progress',
                 '--output', outfmt,
-                '--format', '[height <=? 1080]',
+                '--format', fmt,
                 '--ignore-errors',
                 '--no-continue',
                 '--no-overwrites',
