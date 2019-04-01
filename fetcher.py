@@ -250,6 +250,7 @@ class Video:
         url = 'https://www.youtube.com/watch?v=%s' % self.id
         p = subprocess.Popen(['youtube-dl',
                 '--print-json',
+                '--cache-dir', './yt-dl-cache/',
                 '--no-progress',
                 '--output', outfmt,
                 '--format', '[height <=? 1080]',
