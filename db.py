@@ -84,6 +84,13 @@ def run_cmd(coordinator, cmd):
             count,
             (total_size / count) / 1024 / 1024, dur_str(total_dur),
             dur_str(total_dur // count)))
+    elif cmd.startswith('getvid'):
+        id = cmd.split(' ')[1]
+        for profile in coordinator.get_profiles():
+            for vid in profile.get_videos():
+                if vid.id == id:
+                    print(json.dumps(vid.video_data, indent=4))
+                    break
     else:
         assert False
 
