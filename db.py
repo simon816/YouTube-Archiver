@@ -91,6 +91,53 @@ def run_cmd(coordinator, cmd):
                 if vid.id == id:
                     print(json.dumps(vid.video_data, indent=4))
                     break
+    elif cmd == 'dedup':
+        dirs = {}
+        for profile in coordinator.get_profiles():
+            for vid in profile.get_videos():
+                if vid.video_data is None:
+                    continue
+                fn = vid.video_data['filename']
+                dn, fn = os.path.split(fn)
+                dirs.setdefault(dn, []).append((fn, vid))
+        changed = False
+        for dn, files in dirs.items():
+            listfiles = os.listdir(dn)
+            for file, vid in files:
+                noex = file[:file.rindex('.')]
+                adj = [fn for fn in listfiles if fn.startswith(noex)]
+                thumbs = []
+                subtitles = []
+                vidfiles = []
+                parts = []
+                for f in adj:
+                    if f.endswith(".jpg"):
+                        thumbs.append(f)
+                    elif f.endswith(".vtt"):
+                        subtitles.append(f)
+                    elif f.endswith(".part"):
+                        parts.append(f)
+                    else:
+                        vidfiles.append(f)
+                if len(vidfiles) == 1:
+                    continue
+                # this is a combined video
+                assert '+' in vid.video_data['metadata']['format_id'], vid.id
+                nondefault = [fn for fn in vidfiles if not
+                              fn.endswith(vid.video_data['metadata']['ext'])]
+                # this is the combined file
+                assert len(nondefault) == 1, vid.id
+                newfile = nondefault[0]
+                _, oldfile = os.path.split(vid.video_data['filename'])
+                # it must actually be the new one
+                assert newfile != oldfile, vid.id
+                print("replace", oldfile, "with", newfile)
+                # destructive action
+                vid.video_data['filename'] = os.path.join(dn, newfile)
+                os.remove(os.path.join(dn, oldfile))
+                changed = True
+        if changed:
+            coordinator.save_state()
     else:
         assert False
 
