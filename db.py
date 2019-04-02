@@ -138,6 +138,28 @@ def run_cmd(coordinator, cmd):
                 changed = True
         if changed:
             coordinator.save_state()
+    elif cmd == 'fixfilename':
+        dirs = {}
+        for profile in coordinator.get_profiles():
+            for vid in profile.get_videos():
+                if vid.video_data is None:
+                    continue
+                fn = vid.video_data['filename']
+                dn, fn = os.path.split(fn)
+                dirs.setdefault(dn, []).append((fn, vid))
+        changed = False
+        for dn, files in dirs.items():
+            listfiles = os.listdir(dn)
+            for file, vid in files:
+                if file in listfiles:
+                    continue
+                noex = file[:file.rindex('.')]
+                adj = [fn for fn in listfiles if fn.startswith(noex)]
+                assert (noex + '.mkv') in adj
+                vid.video_data['filename'] = os.path.join(dn, noex + '.mkv')
+                changed = True
+        if changed:
+            coordinator.save_state()
     else:
         assert False
 
