@@ -12,6 +12,7 @@ import os
 from collections import namedtuple
 
 from logger import ThreadsafeLogger
+from utils import yt_dl
 
 Job = namedtuple('Job', 'cv_id v_id retry')
 
@@ -190,9 +191,8 @@ class Coordinator:
         fmt = 'bestvideo[height <=? 1080]+bestaudio/best[height <=? 1080]/best'
         url = 'https://www.youtube.com/watch?v=%s' % v_id
 
-        p = subprocess.Popen(['youtube-dl',
+        p = subprocess.Popen(yt_dl([
                 '--print-json',
-                '--cache-dir', './yt-dl-cache/',
                 '--limit-rate', str(self.rate_limit),
                 '--no-progress',
                 '--output', outfmt,
@@ -205,7 +205,7 @@ class Coordinator:
                 '--write-sub',
                 '--all-subs',
                 url
-            ], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            ]), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 universal_newlines=True)
         self.log('[%s] Spawned process PID %d', v_id, p.pid)
         self.child_processes[p.pid] = p

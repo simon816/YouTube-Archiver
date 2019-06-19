@@ -29,7 +29,8 @@ CREATE TABLE fetch_jobs (
 );
 
 CREATE TABLE channel_fetch_jobs (
-    channel_id text NOT NULL PRIMARY KEY
+    channel_id text NOT NULL PRIMARY KEY,
+    retry integer NOT NULL DEFAULT 0
 );
 
 CREATE TABLE stored_video (
