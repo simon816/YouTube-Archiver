@@ -53,7 +53,7 @@ class Coordinator:
         for p in self.child_processes.values():
             p.send_signal(signal.SIGINT)
         self.log("Waiting for child termination")
-        for p in self.child_processes.values():
+        for p in list(self.child_processes.values()):
             p.wait()
         self.log("Shutdown threadpool")
         self.pool.shutdown(True)
@@ -176,6 +176,10 @@ class Coordinator:
             self.log("[%s] %s", v_id, line)
 
     def try_download_video(self, f_id, job):
+        if not self.jobthread.is_alive():
+            self.log("[%s] Job thread died", job.v_id)
+            del self.futures[f_id]
+            return
         try:
             self.download_video(f_id, job)
         except:

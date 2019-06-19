@@ -17,7 +17,7 @@ def parse_subscriptions(file):
 def queue_all_ids(db, subs):
     c = db.cursor()
     for title, channel_id, url in subs:
-        c.execute('INSERT INTO channel_fetch_jobs (channel_id) VALUES (?)', (
+        c.execute('INSERT OR IGNORE INTO channel_fetch_jobs (channel_id) VALUES (?)', (
             channel_id,))
     db.commit()
 
