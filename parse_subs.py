@@ -1,8 +1,5 @@
 from xml.dom.minidom import parse as parse_xml
-
-from concurrent.futures import ThreadPoolExecutor
-import subprocess
-import json
+import sqlite3
 
 def parse_subscriptions(file):
     doc = parse_xml(file)
@@ -17,28 +14,15 @@ def parse_subscriptions(file):
         entries.append((title, channel_id, url))
     return entries
 
-
-def get_ids(channel_id):
-    print(channel_id)
-    out = subprocess.check_output(['youtube-dl', '-J', '--flat-playlist',
-                             'https://www.youtube.com/channel/' + channel_id])
-    with open('channels/channel-%s.json' % channel_id, 'wb') as f:
-        f.write(out)
-
-def try_get_ids(cid):
-    try:
-        get_ids(cid)
-    except:
-        import traceback
-        traceback.print_exc()
-
-def get_all_ids(entries):
-    with ThreadPoolExecutor() as pool:
-        for title, cid, url in entries:
-            pool.submit(try_get_ids, cid)
-    
-
+def queue_all_ids(db, subs):
+    c = db.cursor()
+    for title, channel_id, url in subs:
+        c.execute('INSERT INTO channel_fetch_jobs (channel_id) VALUES (?)', (
+            channel_id,))
+    db.commit()
 
 if __name__ == '__main__':
     subs = parse_subscriptions('subscription_manager.opml')
-    get_all_ids(subs)
+    db = sqlite3.connect('youtube.db')
+    queue_all_ids(db, subs)
+    db.close()
