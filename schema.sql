@@ -76,3 +76,11 @@ CREATE TABLE subtitle_files (
 CREATE TABLE ia_video (
     video_id text PRIMARY KEY
 );
+
+CREATE TABLE yt_archive_channels (
+    id integer NOT NULL PRIMARY KEY,
+    channel_id text,
+    username text,
+    unique(channel_id),
+    unique(username)
+);

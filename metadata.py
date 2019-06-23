@@ -356,7 +356,7 @@ class YoutubeAPIBackend:
         # A job partially failed. Therefore have to revert most_recent to before
         # the job started
         aux = job.aux_data
-        self.update_most_recent(aux['seq'] + 2, aux['latest_id'], job.ch_id, True)
+        self.update_most_recent(aux['seq'] + 2, aux['latest_id'], job.ch_id)
 
     def store_channel_video(self, c, data, job):
         video_id, video = data
