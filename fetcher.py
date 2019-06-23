@@ -6,26 +6,23 @@ import time
 import json
 import signal
 import subprocess
-import zlib
 import glob
 import os
 from collections import namedtuple
 
 from logger import ThreadsafeLogger
-from utils import yt_dl
+from utils import yt_dl, compress_json
 
 Job = namedtuple('Job', 'cv_id v_id retry')
 
-class Coordinator:
+class VideoFetcher:
 
     def __init__(self, db):
         self.db = db
 
-    def load_settings(self):
-        Q = 'SELECT workers, bandwidth, max_retry FROM fetch_settings'
-        workers, bandwidth, max_retry = self.db.execute(Q).fetchone()
+    def load_settings(self, workers, bandwidth, max_retry):
         self.workers = workers
-        # In Mb/s from the database
+        # In Mb/s from the config
         self.bandwidth = bandwidth * 1024 * 1024
         self.rate_limit = self.bandwidth / self.workers / 8
         self.max_retry = max_retry
@@ -71,7 +68,7 @@ class Coordinator:
         self.logger.log(fmt % args)
 
     def re_queue(self, result, c):
-        c.execute('INSERT OR IGNORE INTO fetch_jobs (cvideo_id, retry) VALUES (?, ?)',
+        c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
                   (result['job'].cv_id, result['job'].retry + 1))
 
     def post_process(self, result, c):
@@ -83,10 +80,10 @@ class Coordinator:
             data = result['data']
             self.check_metadata(c, job, data)
             fn = result['filename']
-            c.execute('INSERT INTO stored_video (cvideo_id, video_filename) VALUES (?, ?)', (
+            c.execute('INSERT INTO stored_video (cv_id, video_filename) VALUES (?, ?)', (
                 job.cv_id, fn))
             store_id = c.lastrowid
-            raw = zlib.compress(json.dumps(data).encode('utf8'))
+            raw = compress_json(data)
             c.execute('INSERT INTO video_raw_meta (store_id, compressed_json) VALUES (?, ?)', (store_id, raw))
             basename = fn[:fn.rindex('.') + 1]
             files = glob.glob(glob.escape(basename) + '*')
@@ -106,13 +103,13 @@ class Coordinator:
         def check_eq(val, key):
             if val != data[key]:
                 self.log('[%s] Different %s: %r != %r', job.v_id, key, val, data[key])
-        row = c.execute('SELECT upload_date, title, description, duration FROM channel_video WHERE id = ?',
+        row = c.execute('SELECT published_at, title, description, duration FROM channel_video WHERE id = ?',
                   (job.cv_id,)).fetchone()
         check_eq(row[0], 'upload_date')
         check_eq(row[1], 'fulltitle')
         check_eq(row[2], 'description')
         check_eq(row[3], 'duration')
-        row = c.execute('SELECT c.channel_id, c.name, c.username FROM channel c JOIN channel_video cv ON cv.channel_id = c.id WHERE cv.id = ?',
+        row = c.execute('SELECT c.channel_id, c.title, c.username FROM channels c JOIN channel_video cv ON cv.channel_id = c.id WHERE cv.id = ?',
                         (job.cv_id,)).fetchone()
         check_eq(row[0], 'channel_id')
         check_eq(row[1], 'uploader')
@@ -120,7 +117,7 @@ class Coordinator:
 
     def poll_jobs(self):
         self.log("Begin polling")
-        Q = 'SELECT v.id, v.video_id, retry FROM fetch_jobs JOIN channel_video v ON v.id = cvideo_id WHERE retry < ?'
+        Q = 'SELECT v.id, v.video_id, retry FROM fetch_jobs JOIN channel_video v ON v.id = cv_id WHERE retry < ?'
         while self.running:
             c = self.db.cursor()
             need_commit = False
@@ -129,12 +126,12 @@ class Coordinator:
                 self.log('Submitting %d jobs', len(rows))
                 for cv_id, v_id, retry in rows:
                     need_commit = True
-                    c.execute('DELETE FROM fetch_jobs WHERE cvideo_id = ?',
+                    c.execute('DELETE FROM fetch_jobs WHERE cv_id = ?',
                               (cv_id,))
                     if v_id in self.queued_videos:
                         self.log('[%s] Refusing to enqueue, already in queue', v_id)
                         continue
-                    exists = c.execute('SELECT 1 FROM stored_video WHERE cvideo_id = ?', (
+                    exists = c.execute('SELECT 1 FROM stored_video WHERE cv_id = ?', (
                         cv_id,)).fetchone()
                     if exists:
                         self.log('[%s] Refusing to download, already exists', v_id)
@@ -159,7 +156,7 @@ class Coordinator:
         if self.queued_videos:
             c = self.db.cursor()
             for job in self.queued_videos.values():
-                c.execute('INSERT OR IGNORE INTO fetch_jobs (cvideo_id, retry) VALUES (?, ?)',
+                c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
                   (job.cv_id, job.retry))
             self.db.commit()
 
@@ -241,11 +238,16 @@ class Coordinator:
 
 
 if __name__ == '__main__':
-    db = sqlite3.connect('youtube.db', check_same_thread=False)
-    c = Coordinator(db)
-    c.load_settings()
+    with open('config.json', 'r') as f:
+        config = json.load(f)
+    db = sqlite3.connect(config['database']['file'], check_same_thread=False)
+    db.execute('PRAGMA foreign_keys = ON')
+    f_config = config['video_fetcher']
+    f = VideoFetcher(db)
+    f.load_settings(f_config['workers'], f_config['bandwidth'],
+                    f_config['max_retry'])
     def interrupt(sig, stack):
-        c.stop()
+        f.stop()
         db.close()
     signal.signal(signal.SIGINT, interrupt)
-    c.run()
+    f.run()

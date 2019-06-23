@@ -1,0 +1,15 @@
+{
+    "video_fetcher": {
+        "workers": 3,
+        "bandwidth": 25,
+        "max_retry": 3
+    },
+    "metadata_fetcher": {
+        "youtube_api_key": "INSERT_KEY_HERE",
+        "workers": 8,
+        "max_retry": 3
+    },
+    "database": {
+        "file": "youtube.db"
+    }
+}
