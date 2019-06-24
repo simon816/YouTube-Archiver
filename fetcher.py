@@ -87,15 +87,19 @@ class VideoFetcher:
                     self.log('[%s] Error: Unknown file %s', job.v_id, f)
 
     def check_metadata(self, c, job, data):
-        def check_eq(val, key):
-            if val != data[key]:
-                self.log('[%s] Different %s: %r != %r', job.v_id, key, val, data[key])
+        def check_eq(val, key, norm=False):
+            dval = data[key]
+            if norm:
+                dval = '\n'.join(line.strip() for line in dval.splitlines())
+                val = '\n'.join(line.strip() for line in val.splitlines())
+            if val != dval:
+                self.log('[%s] Different %s: %r != %r', job.v_id, key, val, dval)
         row = c.execute('SELECT title, description, duration FROM channel_video WHERE id = ?',
                   (job.cv_id,)).fetchone()
         check_eq(row[0], 'fulltitle')
-        check_eq(row[1], 'description')
+        check_eq(row[1], 'description', norm=True)
         check_eq(row[2], 'duration')
-        row = c.execute('SELECT c.channel_id, c.title, c.username FROM channels c JOIN channel_video cv ON cv.channel_id = c.id WHERE cv.id = ?',
+        row = c.execute('SELECT c.channel_id, c.title, c.username FROM channels c JOIN channel_video cv ON cv.ch_id = c.id WHERE cv.id = ?',
                         (job.cv_id,)).fetchone()
         check_eq(row[0], 'channel_id')
         check_eq(row[1], 'uploader')
@@ -118,13 +122,16 @@ class VideoFetcher:
 
     def shutdown_routine(self):
         self.log("Job thread stopping")
+
+        self.pool.shutdown(False)
         self.log("Cancelling all pending tasks")
-        for f in self.futures.values():
+        for f in list(self.futures.values()):
             f.cancel()
+        self.pool.shutdown(False)
 
         self.log("Closing all youtube-dl processes")
-        for p in self.child_processes.values():
-            p.send_signal(signal.SIGINT)
+        for p in list(self.child_processes.values()):
+            p.send_signal(signal.SIGTERM)
         self.log("Waiting for child termination")
         for p in list(self.child_processes.values()):
             p.wait()
@@ -141,7 +148,7 @@ class VideoFetcher:
 
         if self.queued_videos:
             self.log("Requeuing unfinished jobs")
-            for job in self.queued_videos.values():
+            for job in list(self.queued_videos.values()):
                 c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
                   (job.cv_id, job.retry))
             self.queued_videos = {}
@@ -175,9 +182,9 @@ class VideoFetcher:
                         self.add_job(Job(cv_id, v_id, retry))
 
             if self.process_done_queue(c):
-                needs_commit = True
+                need_commit = True
 
-            if needs_commit:
+            if need_commit:
                 try:
                     self.db.commit()
                     retry_commit = False
@@ -214,7 +221,7 @@ class VideoFetcher:
             self.log("[%s] %s", v_id, line)
 
     def try_download_video(self, f_id, job):
-        if not self.jobthread.is_alive():
+        if not self.jobthread.is_alive() or not self.running:
             self.log("[%s] Job thread died", job.v_id)
             del self.futures[f_id]
             return
@@ -228,7 +235,7 @@ class VideoFetcher:
 
     def download_video(self, f_id, job):
         v_id = job.v_id
-        self.log('[%s] Begin download. Attempt %d', v_id, retry)
+        self.log('[%s] Begin download. Attempt %d', v_id, job.retry)
         outfmt = r'Videos/%(uploader)s/%(upload_date)s - %(title)s - %(id)s.%(ext)s'
         fmt = 'bestvideo[height <=? 1080]+bestaudio/best[height <=? 1080]/best'
         url = 'https://www.youtube.com/watch?v=%s' % v_id
@@ -261,7 +268,7 @@ class VideoFetcher:
             result['error'] = False
             ret = json.loads(outs)
             fn = ret['_filename']
-            if '+' in ret['format_id']:
+            if errs.find('merged into mkv') != -1:
                 # This is a combined file in mkv
                 fn = fn[:fn.rindex('.')] + '.mkv'
             del ret['_filename']

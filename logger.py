@@ -20,7 +20,7 @@ class ThreadsafeLogger:
         self.logqueue.put(msg)
 
     def _do_log(self, msg):
-        print(msg)
+        print(msg, flush=True)
 
     def drain_logqueue(self):
         while True:
