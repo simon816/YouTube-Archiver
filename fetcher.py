@@ -31,7 +31,7 @@ class VideoFetcher:
         self.running = True
         self.pool = ThreadPoolExecutor(max_workers=self.workers)
         self.logger = ThreadsafeLogger()
-        self.jobthread = Thread(target=self.poll_jobs)
+        self.jobthread = Thread(target=self.try_main_loop)
         self.child_processes = {}
         self.futures = {}
         self.queued_videos = {}
@@ -41,28 +41,12 @@ class VideoFetcher:
 
     def stop(self):
         self.log("Stopping")
-        # Prevent new tasks
-        self.pool.shutdown(False)
-        self.log("Cancelling futures")
-        for f in self.futures.values():
-            f.cancel()
-        self.log("Closing all youtube-dl processes")
-        for p in self.child_processes.values():
-            p.send_signal(signal.SIGINT)
-        self.log("Waiting for child termination")
-        for p in list(self.child_processes.values()):
-            p.wait()
-        self.log("Shutdown threadpool")
-        self.pool.shutdown(True)
+        self.running = False
+        self.jobthread.join()
         self.log("Halt logging thread")
         self.logger.stop()
-        self.running = False
-        self.log("Halt job queue thread")
-        self.jobthread.join()
         self.log("Stopped")
         self.logger.drain_logqueue()
-        self.child_processes = {}
-        self.futures = {}
 
     def log(self, fmt, *args):
         self.logger.log(fmt % args)
@@ -103,24 +87,61 @@ class VideoFetcher:
         def check_eq(val, key):
             if val != data[key]:
                 self.log('[%s] Different %s: %r != %r', job.v_id, key, val, data[key])
-        row = c.execute('SELECT published_at, title, description, duration FROM channel_video WHERE id = ?',
+        row = c.execute('SELECT title, description, duration FROM channel_video WHERE id = ?',
                   (job.cv_id,)).fetchone()
-        check_eq(row[0], 'upload_date')
-        check_eq(row[1], 'fulltitle')
-        check_eq(row[2], 'description')
-        check_eq(row[3], 'duration')
+        check_eq(row[0], 'fulltitle')
+        check_eq(row[1], 'description')
+        check_eq(row[2], 'duration')
         row = c.execute('SELECT c.channel_id, c.title, c.username FROM channels c JOIN channel_video cv ON cv.channel_id = c.id WHERE cv.id = ?',
                         (job.cv_id,)).fetchone()
         check_eq(row[0], 'channel_id')
         check_eq(row[1], 'uploader')
         check_eq(row[2], 'uploader_id')
 
-    def poll_jobs(self):
+    def try_main_loop(self):
+        try:
+            self.main_loop()
+        finally:
+            # Stopped running
+            self.log("Job thread stopping")
+            self.log("Cancelling all pending tasks")
+            for f in self.futures.values():
+                f.cancel()
+
+            self.log("Closing all youtube-dl processes")
+            for p in self.child_processes.values():
+                p.send_signal(signal.SIGINT)
+            self.log("Waiting for child termination")
+            for p in list(self.child_processes.values()):
+                p.wait()
+
+            self.log("Shutdown threadpool")
+            self.pool.shutdown()
+
+            self.log("Processing finished jobs")
+            c = self.db.cursor()
+            self.process_done_queue(c)
+
+            self.child_processes = {}
+            self.futures = {}
+
+            if self.queued_videos:
+                self.log("Requeuing unfinished jobs")
+                for job in self.queued_videos.values():
+                    c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
+                      (job.cv_id, job.retry))
+                self.queued_videos = {}
+
+            self.db.commit()
+            
+
+    def main_loop(self):
         self.log("Begin polling")
+        retry_commit = False
         Q = 'SELECT v.id, v.video_id, retry FROM fetch_jobs JOIN channel_video v ON v.id = cv_id WHERE retry < ?'
         while self.running:
             c = self.db.cursor()
-            need_commit = False
+            need_commit = retry_commit
             rows = c.execute(Q, (self.max_retry,)).fetchall()
             if rows:
                 self.log('Submitting %d jobs', len(rows))
@@ -137,34 +158,39 @@ class VideoFetcher:
                         self.log('[%s] Refusing to download, already exists', v_id)
                     else:
                         self.add_job(Job(cv_id, v_id, retry))
-            while True:
+
+            if self.process_done_queue(c):
+                needs_commit = True
+
+            if needs_commit:
                 try:
-                    result = self.done_queue.get(False)
-                except Empty:
-                    break
-                need_commit = True
-                try:
-                    self.post_process(result, c)
+                    self.db.commit()
+                    retry_commit = False
                 except:
-                    self.logerror(result['job'].v_id)
-                    self.re_queue(result, c)
-            if need_commit:
-                self.db.commit()
+                    retry_commit = True
+                    self.logerror('JobThread')
             time.sleep(0.5)
-        # Stopped running
-        # Requeue any unfinished jobs
-        if self.queued_videos:
-            c = self.db.cursor()
-            for job in self.queued_videos.values():
-                c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
-                  (job.cv_id, job.retry))
-            self.db.commit()
 
     def add_job(self, job):
         f_id = len(self.futures)
         self.queued_videos[job.v_id] = job
         future = self.pool.submit(self.try_download_video, f_id, job)
         self.futures[f_id] = future
+
+    def process_done_queue(self, c):
+        need_commit = False
+        while True:
+            try:
+                result = self.done_queue.get(False)
+            except Empty:
+                break
+            need_commit = True
+            try:
+                self.post_process(result, c)
+            except:
+                self.logerror(result['job'].v_id)
+                self.re_queue(result, c)
+        return need_commit
 
     def logerror(self, v_id):
         self.log("[%s] Python exception", v_id)
@@ -246,8 +272,9 @@ if __name__ == '__main__':
     f = VideoFetcher(db)
     f.load_settings(f_config['workers'], f_config['bandwidth'],
                     f_config['max_retry'])
-    def interrupt(sig, stack):
+    def signal_stop(sig, stack):
         f.stop()
         db.close()
-    signal.signal(signal.SIGINT, interrupt)
+    signal.signal(signal.SIGINT, signal_stop)
+    signal.signal(signal.SIGTERM, signal_stop)
     f.run()

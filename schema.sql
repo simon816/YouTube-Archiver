@@ -45,7 +45,7 @@ CREATE TABLE video_meta_fetch_jobs (
 );
 
 CREATE TABLE fetch_jobs (
-    cv_id integer NOT NULL REFERENCES channel_video(id) ON DELETE CASCADE,
+    cv_id integer NOT NULL PRIMARY KEY REFERENCES channel_video(id) ON DELETE CASCADE,
     retry integer NOT NULL DEFAULT 0
 );
 
@@ -74,7 +74,8 @@ CREATE TABLE subtitle_files (
 );
 
 CREATE TABLE ia_video (
-    video_id text PRIMARY KEY
+    video_id text PRIMARY KEY,
+    ia_id text NOT NULL
 );
 
 CREATE TABLE yt_archive_channels (
@@ -83,4 +84,8 @@ CREATE TABLE yt_archive_channels (
     username text,
     unique(channel_id),
     unique(username)
+);
+
+CREATE TABLE ignored_channels (
+    ch_id integer NOT NULL PRIMARY KEY REFERENCES channels(id) ON DELETE CASCADE
 );

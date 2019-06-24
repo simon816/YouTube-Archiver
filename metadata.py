@@ -397,8 +397,9 @@ if __name__ == '__main__':
     f_config = config['metadata_fetcher']
     f = MetadataFetcher(db, f_config['workers'], f_config['max_retry'],
                         APIKeyAuthMode(f_config['youtube_api_key']))
-    def interrupt(sig, stack):
+    def signal_stop(sig, stack):
         f.stop()
         db.close()
-    signal.signal(signal.SIGINT, interrupt)
+    signal.signal(signal.SIGINT, signal_stop)
+    signal.signal(signal.SIGTERM, signal_stop)
     f.run()
