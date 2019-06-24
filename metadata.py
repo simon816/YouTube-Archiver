@@ -117,6 +117,9 @@ class MetadataFetcher:
         self.log("Stopping")
         self.running = False
         self.jobthread.join()
+        self.close_logger()
+
+    def close_logger(self):
         self.log("Halt logging thread")
         self.logger.stop()
         self.log("Stopped")
@@ -134,25 +137,37 @@ class MetadataFetcher:
     def try_main_loop(self):
         try:
             self.main_loop()
+            abnormal_exit = False
+        except:
+            abnormal_exit = True
+            raise
         finally:
             # Stopped running
-            self.log("Job thread stopping")
-            self.log("Cancelling all pending tasks")
-            for f in self.futures:
-                f.cancel()
-            self.futures = []
-            self.log("Shutting down threadpool")
-            self.pool.shutdown()
-            self.log("Requeuing unfinished jobs")
-            c = self.db.cursor()
-            for channel_id in self.active_channels:
-                # -1 because retry count is incremented
-                self.retry_channel_fetch(c, channel_id, -1)
-            self.active_channels = set()
-            for cv_id in self.active_videos:
-                self.retry_video_fetch(c, cv_id, -1)
-            self.active_videos = set()
-            self.db.commit()
+            try:
+                self.shutdown_routine()
+            finally:
+                if abnormal_exit:
+                    self.close_logger()
+
+    def shutdown_routine(self):
+        self.log("Job thread stopping")
+        self.log("Cancelling all pending tasks")
+        for f in self.futures:
+            f.cancel()
+        self.futures = []
+        self.log("Shutting down threadpool")
+        self.pool.shutdown()
+        self.log("Requeuing unfinished jobs")
+        c = self.db.cursor()
+        for channel_id in self.active_channels:
+            # -1 because retry count is incremented
+            self.retry_channel_fetch(c, channel_id, -1)
+        self.active_channels = set()
+        for cv_id in self.active_videos:
+            self.retry_video_fetch(c, cv_id, -1)
+        self.active_videos = set()
+        self.db.commit()
+        self.log("Job thread exited")
 
     def pop_from_db_queue(self, c, id_field, table):
         items = c.execute('SELECT %s, retry FROM %s WHERE retry < ?' % (id_field, table),

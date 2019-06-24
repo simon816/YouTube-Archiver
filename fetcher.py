@@ -43,6 +43,9 @@ class VideoFetcher:
         self.log("Stopping")
         self.running = False
         self.jobthread.join()
+        self.close_logger()
+
+    def close_logger(self):
         self.log("Halt logging thread")
         self.logger.stop()
         self.log("Stopped")
@@ -101,38 +104,50 @@ class VideoFetcher:
     def try_main_loop(self):
         try:
             self.main_loop()
+            abnormal_exit = False
+        except:
+            abnormal_exit = True
+            raise
         finally:
             # Stopped running
-            self.log("Job thread stopping")
-            self.log("Cancelling all pending tasks")
-            for f in self.futures.values():
-                f.cancel()
+            try:
+                self.shutdown_routine()
+            finally:
+                if abnormal_exit:
+                    self.close_logger()
 
-            self.log("Closing all youtube-dl processes")
-            for p in self.child_processes.values():
-                p.send_signal(signal.SIGINT)
-            self.log("Waiting for child termination")
-            for p in list(self.child_processes.values()):
-                p.wait()
+    def shutdown_routine(self):
+        self.log("Job thread stopping")
+        self.log("Cancelling all pending tasks")
+        for f in self.futures.values():
+            f.cancel()
 
-            self.log("Shutdown threadpool")
-            self.pool.shutdown()
+        self.log("Closing all youtube-dl processes")
+        for p in self.child_processes.values():
+            p.send_signal(signal.SIGINT)
+        self.log("Waiting for child termination")
+        for p in list(self.child_processes.values()):
+            p.wait()
 
-            self.log("Processing finished jobs")
-            c = self.db.cursor()
-            self.process_done_queue(c)
+        self.log("Shutdown threadpool")
+        self.pool.shutdown()
 
-            self.child_processes = {}
-            self.futures = {}
+        self.log("Processing finished jobs")
+        c = self.db.cursor()
+        self.process_done_queue(c)
 
-            if self.queued_videos:
-                self.log("Requeuing unfinished jobs")
-                for job in self.queued_videos.values():
-                    c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
-                      (job.cv_id, job.retry))
-                self.queued_videos = {}
+        self.child_processes = {}
+        self.futures = {}
 
-            self.db.commit()
+        if self.queued_videos:
+            self.log("Requeuing unfinished jobs")
+            for job in self.queued_videos.values():
+                c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
+                  (job.cv_id, job.retry))
+            self.queued_videos = {}
+
+        self.db.commit()
+        self.log("Job thread exited")
             
 
     def main_loop(self):
