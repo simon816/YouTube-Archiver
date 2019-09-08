@@ -371,7 +371,7 @@ class YoutubeAPIBackend:
         # A job partially failed. Therefore have to revert most_recent to before
         # the job started
         aux = job.aux_data
-        self.update_most_recent(aux['seq'] + 2, aux['latest_id'], job.ch_id)
+        self.update_most_recent(c, aux['seq'] + 2, aux['latest_id'], job.ch_id)
 
     def store_channel_video(self, c, data, job):
         video_id, video = data
@@ -381,15 +381,15 @@ class YoutubeAPIBackend:
                   (job.ch_id, video_id, video['title'],
                    video['description'], video['publishedAt']))
         cv_id = c.lastrowid
-        self.update_most_recent(job.aux_data['seq'] + 1, video_id, ch_id)
+        self.update_most_recent(c, job.aux_data['seq'] + 1, video_id, job.ch_id)
         return cv_id
 
-    def update_most_recent(self, seq, video_id, ch_id):
+    def update_most_recent(self, c, seq, video_id, ch_id):
         # Sequence number needed because most recent video comes first
         # so we must track this run where seq_num is +1 from previous run
         c.execute('UPDATE api_channel_data SET most_recent = ?, seq_num = ? \
                    WHERE ch_id = ? AND seq_num < ?',
-                  (video_id, seq, job.ch_id, seq))
+                  (video_id, seq, ch_id, seq))
 
     def get_additional_video_data(self, video_ids):
         for video in self.yt.get_videos(video_ids, 'contentDetails'):
