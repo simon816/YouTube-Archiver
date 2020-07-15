@@ -76,7 +76,7 @@ class VideoFetcher:
             files = glob.glob(glob.escape(basename) + '*')
             files.remove(fn)
             for f in files:
-                if f.endswith('.jpg'):
+                if f.endswith('.jpg') or f.endswith('webp'):
                     c.execute('INSERT INTO thumbnail_file (store_id, filename) VALUES (?, ?)', (store_id, f))
                 elif f.endswith('.vtt'):
                     enddot = f.rindex('.')
