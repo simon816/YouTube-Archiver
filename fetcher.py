@@ -19,6 +19,7 @@ class VideoFetcher:
 
     def __init__(self, db):
         self.db = db
+        self.next_f_id = 0
 
     def load_settings(self, workers, bandwidth, max_retry, dld_fmt):
         self.workers = workers
@@ -195,7 +196,8 @@ class VideoFetcher:
             time.sleep(0.5)
 
     def add_job(self, job):
-        f_id = len(self.futures)
+        f_id = self.next_f_id
+        self.next_f_id += 1
         self.queued_videos[job.v_id] = job
         future = self.pool.submit(self.try_download_video, f_id, job)
         self.futures[f_id] = future
@@ -243,6 +245,7 @@ class VideoFetcher:
 
         p = subprocess.Popen(yt_dl([
                 '--print-json',
+                '-4',
                 '--limit-rate', str(self.rate_limit),
                 '--no-progress',
                 '--output', outfmt,
