@@ -20,12 +20,13 @@ class VideoFetcher:
     def __init__(self, db):
         self.db = db
 
-    def load_settings(self, workers, bandwidth, max_retry):
+    def load_settings(self, workers, bandwidth, max_retry, dld_fmt):
         self.workers = workers
         # In Mb/s from the config
         self.bandwidth = bandwidth * 1024 * 1024
         self.rate_limit = self.bandwidth / self.workers / 8
         self.max_retry = max_retry
+        self.format = dld_fmt
 
     def run(self):
         self.running = True
@@ -76,7 +77,7 @@ class VideoFetcher:
             files = glob.glob(glob.escape(basename) + '*')
             files.remove(fn)
             for f in files:
-                if f.endswith('.jpg') or f.endswith('webp'):
+                if f.endswith('.jpg') or f.endswith('.webp'):
                     c.execute('INSERT INTO thumbnail_file (store_id, filename) VALUES (?, ?)', (store_id, f))
                 elif f.endswith('.vtt'):
                     enddot = f.rindex('.')
@@ -237,15 +238,15 @@ class VideoFetcher:
         v_id = job.v_id
         self.log('[%s] Begin download. Attempt %d', v_id, job.retry)
         outfmt = r'Videos/%(uploader)s/%(upload_date)s - %(title)s - %(id)s.%(ext)s'
-        fmt = 'bestvideo[height <=? 1080]+bestaudio/best[height <=? 1080]/best'
         url = 'https://www.youtube.com/watch?v=%s' % v_id
+        # get format from https://github.com/TheFrenchGhosty/TheFrenchGhostys-YouTube-DL-Archivist-Scripts
 
         p = subprocess.Popen(yt_dl([
                 '--print-json',
                 '--limit-rate', str(self.rate_limit),
                 '--no-progress',
                 '--output', outfmt,
-                '--format', fmt,
+                '--format', self.format,
                 '--ignore-errors',
                 '--no-continue',
                 '--no-overwrites',
@@ -293,7 +294,7 @@ if __name__ == '__main__':
     f_config = config['video_fetcher']
     f = VideoFetcher(db)
     f.load_settings(f_config['workers'], f_config['bandwidth'],
-                    f_config['max_retry'])
+                    f_config['max_retry'], f_config['format'])
     def signal_stop(sig, stack):
         f.stop()
         db.close()

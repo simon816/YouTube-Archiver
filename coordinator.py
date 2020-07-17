@@ -83,6 +83,24 @@ def stats(db):
     print('Average seconds per megabyte: %.2fs/MB' % (total_dur / (total_size / 1024 / 1024)))
     print('Longest video: %s' % dur_str(max_dur))
 
+def check_files(db):
+    c = db.cursor()
+    root = '/media/bd/sinkhole/YouTube/'
+    files = c.execute('select video_filename from stored_video union select filename from thumbnail_file union select filename from subtitle_files').fetchall()
+    fileset = set()
+    for (filename,) in files:
+        path = os.path.join(root, filename)
+        if not os.path.isfile(path):
+            print("Missing", filename)
+        fileset.add(path)
+    for dir, dirs, files in os.walk(os.path.join(root, 'Videos')):
+        for file in files:
+            path = os.path.join(dir, file)
+            if path not in fileset:
+                mtime = os.path.getmtime(path)
+                import datetime
+                print("Unattributed", datetime.datetime.fromtimestamp(mtime), path)
+
 if __name__ == '__main__':
     with open('config.json', 'r') as f:
         config = json.load(f)
@@ -94,6 +112,8 @@ if __name__ == '__main__':
         stats(db)
     elif action == 'queue':
         queue_candidates(db)
+    elif action == 'check':
+        check_files(db)
     else:
         print("Unknown action", action)
     db.close()
