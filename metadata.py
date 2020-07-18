@@ -140,6 +140,7 @@ class MetadataFetcher:
             abnormal_exit = False
         except:
             abnormal_exit = True
+            self.logerror('main_loop')
             raise
         finally:
             # Stopped running
@@ -233,7 +234,9 @@ class MetadataFetcher:
             for data, job, error in self.cvideo_fetch_task.process(sleep):
                 needs_commit = True
                 if error:
-                    self.active_channels.remove(job.key)
+                    # discard rather than remove because the error may happen
+                    # after the first entry
+                    self.active_channels.discard(job.key)
                     self.log("[JobThread] Job error: %s", job)
                     self.backend.partial_cv_fail(c, job)
                     self.retry_channel_fetch(c, job.key, job.retry)
@@ -241,7 +244,7 @@ class MetadataFetcher:
                 if data is None:
                     # First entry always None
                     self.active_channels.remove(job.key)
-                    self.log('[%s] Finished channel video fetch', job.key)
+                    self.log('[%s] Begin streaming channel video list', job.key)
                     continue
                 video_id, video = data
                 logkey = job.key + ':' + video_id

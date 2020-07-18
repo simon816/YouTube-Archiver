@@ -117,6 +117,12 @@ class YoutubeAPI:
             'maxResults': max_results
         })
 
+    def get_channel_for_username(self, username, part='snippet'):
+        return self.make_paginated_request('/channels', {
+            'part': part,
+            'forUsername': username
+        })
+
     def get_playlist_items(self, playlist_id, part='snippet', max_results=50):
         return self.make_paginated_request('/playlistItems', {
             'part': part,

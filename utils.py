@@ -8,6 +8,9 @@ def yt_dl(args):
 def compress_json(data):
     return zlib.compress(json.dumps(data).encode('utf8'))
 
+def uncompress_json(data):
+    return json.loads(zlib.decompress(data).decode('utf8'))
+
 # from https://stackoverflow.com/a/35936407
 def iso8601_duration_as_seconds(d):
     if d[0] != 'P':

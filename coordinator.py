@@ -101,6 +101,29 @@ def check_files(db):
                 import datetime
                 print("Unattributed", datetime.datetime.fromtimestamp(mtime), path)
 
+def format_info(db):
+    c = db.cursor()
+    from utils import uncompress_json
+    videos = c.execute('select compressed_json from video_raw_meta').fetchall()
+    from collections import defaultdict
+    formats = defaultdict(lambda: 0)
+    for (data,) in videos:
+        vfmt = []
+        meta = uncompress_json(data)
+        for fmt in meta['format'].split('+'):
+            fm = meta['requested_formats'] if 'requested_formats' in meta else meta['formats']
+            for f in fm:
+                if f['format'] == fmt:
+                    vfmt.append(f)
+                if f['vcodec'] == 'none':
+                    f['vcodec'] = None
+                if f['acodec'] == 'none':
+                    f['acodec'] = None
+        fmt = tuple([f['vcodec'] or f['acodec'] for f in vfmt])
+        formats[fmt] += 1
+    for fmt, count in sorted(formats.items(), key=lambda i: i[1]):
+        print(count, fmt)
+
 if __name__ == '__main__':
     with open('config.json', 'r') as f:
         config = json.load(f)
@@ -114,6 +137,8 @@ if __name__ == '__main__':
         queue_candidates(db)
     elif action == 'check':
         check_files(db)
+    elif action == 'fmtinfo':
+        format_info(db)
     else:
         print("Unknown action", action)
     db.close()
