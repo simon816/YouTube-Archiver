@@ -13,7 +13,7 @@ from collections import namedtuple
 from logger import ThreadsafeLogger
 from utils import yt_dl, compress_json
 
-Job = namedtuple('Job', 'cv_id v_id retry')
+Job = namedtuple('Job', 'cv_id v_id retry priority')
 
 class VideoFetcher:
 
@@ -57,8 +57,28 @@ class VideoFetcher:
         self.logger.log(fmt % args)
 
     def re_queue(self, result, c):
-        c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
-                  (result['job'].cv_id, result['job'].retry + 1))
+        retry = 3
+        while retry > 0:
+            try:
+                c.execute('INSERT OR REPLACE INTO fetch_jobs (cv_id, active, priority, retry) VALUES (?, 0, ?, ?)',
+                          (result['job'].cv_id, result['job'].priority, result['job'].retry + 1))
+                break
+            except:
+                retry -= 1
+                if retry == 0:
+                    raise
+
+    def re_queue_job(self, job, c):
+        retry = 3
+        while retry > 0:
+            try:
+                c.execute('INSERT OR REPLACE INTO fetch_jobs (cv_id, active, priority, retry) VALUES (?, 0, ?, ?)',
+                  (job.cv_id, job.priority, job.retry))
+                break
+            except:
+                retry -= 1
+                if retry == 0:
+                    raise
 
     def post_process(self, result, c):
         job = result['job']
@@ -69,24 +89,76 @@ class VideoFetcher:
             data = result['data']
             self.check_metadata(c, job, data)
             fn = result['filename']
-            c.execute('INSERT INTO stored_video (cv_id, video_filename) VALUES (?, ?)', (
-                job.cv_id, fn))
+            retry = 3
+            while retry > 0:
+                try:
+                    c.execute('INSERT INTO stored_video (cv_id, video_filename) VALUES (?, ?)', (
+                        job.cv_id, fn))
+                    break
+                except:
+                    retry -= 1
+                    if retry == 0:
+                        raise
             store_id = c.lastrowid
             raw = compress_json(data)
-            c.execute('INSERT INTO video_raw_meta (store_id, compressed_json) VALUES (?, ?)', (store_id, raw))
+            retry = 3
+            while retry > 0:
+                try:
+                    c.execute('INSERT INTO video_raw_meta (store_id, compressed_json) VALUES (?, ?)', (store_id, raw))
+                    break
+                except:
+                    retry -= 1
+                    if retry == 0:
+                        raise
             basename = fn[:fn.rindex('.') + 1]
             files = glob.glob(glob.escape(basename) + '*')
             files.remove(fn)
             for f in files:
                 if f.endswith('.jpg') or f.endswith('.webp'):
-                    c.execute('INSERT INTO thumbnail_file (store_id, filename) VALUES (?, ?)', (store_id, f))
+                    retry = 3
+                    while retry > 0:
+                        try:
+                            existing = c.execute('SELECT filename FROM thumbnail_file WHERE store_id = ?', (store_id,)).fetchone()
+                            if existing:
+                                other = existing[0]
+                                if other != f:
+                                    self.log('[%s] Warn: duplicate thumbnails (%s, %s)', job.v_id, other, f)
+                                    if files.count(other):
+                                        # file still exists, let's remove it
+                                        os.unlink(other)
+                                c.execute('DELETE FROM thumbnail_file WHERE store_id = ?', (store_id,))
+                            c.execute('INSERT INTO thumbnail_file (store_id, filename) VALUES (?, ?)', (store_id, f))
+                            break
+                        except:
+                            retry -= 1
+                            if retry == 0:
+                                raise
                 elif f.endswith('.vtt'):
                     enddot = f.rindex('.')
                     startdot = f[:enddot].rindex('.')
                     lang = f[startdot + 1:enddot]
-                    c.execute('INSERT INTO subtitle_files (store_id, language, filename) VALUES (?, ?, ?)', (store_id, lang, f))
+                    retry = 3
+                    while retry > 0:
+                        try:
+                            c.execute('INSERT INTO subtitle_files (store_id, language, filename) VALUES (?, ?, ?)', (store_id, lang, f))
+                            break
+                        except:
+                            retry -= 1
+                            if retry == 0:
+                                raise
                 else:
                     self.log('[%s] Error: Unknown file %s', job.v_id, f)
+            self.delete_job(c, job.cv_id)
+
+    def delete_job(self, c, cv_id):
+        retry = 3
+        while retry > 0:
+            try:
+                c.execute('DELETE FROM fetch_jobs WHERE cv_id = ?', (cv_id,))
+                break
+            except:
+                retry -= 1
+                # don't need to re-throw here - can just leave job on queue
 
     def check_metadata(self, c, job, data):
         def check_eq(val, key, norm=False):
@@ -151,27 +223,38 @@ class VideoFetcher:
         if self.queued_videos:
             self.log("Requeuing unfinished jobs")
             for job in list(self.queued_videos.values()):
-                c.execute('INSERT OR IGNORE INTO fetch_jobs (cv_id, retry) VALUES (?, ?)',
-                  (job.cv_id, job.retry))
+                self.re_queue_job(job, c)
             self.queued_videos = {}
 
-        self.db.commit()
+        retry = 3
+        while retry > 0:
+            try:
+                self.db.commit()
+                break
+            except:
+                retry -= 1
+                if retry == 0:
+                    raise
         self.log("Job thread exited")
             
 
     def main_loop(self):
         self.log("Begin polling")
         retry_commit = False
-        Q = 'SELECT v.id, v.video_id, retry FROM fetch_jobs JOIN channel_video v ON v.id = cv_id WHERE retry < ?'
+        Q = 'SELECT v.id, v.video_id, priority, retry FROM fetch_jobs JOIN channel_video v ON v.id = cv_id WHERE active = 0 AND retry < ? ORDER BY priority'
         while self.running:
             c = self.db.cursor()
             need_commit = retry_commit
-            rows = c.execute(Q, (self.max_retry,)).fetchall()
+            try:
+                rows = c.execute(Q, (self.max_retry,)).fetchall()
+            except:
+                rows = []
+                self.logerror('JobThread')
             if rows:
                 self.log('Submitting %d jobs', len(rows))
-                for cv_id, v_id, retry in rows:
+                for cv_id, v_id, priority, retry in rows:
                     need_commit = True
-                    c.execute('DELETE FROM fetch_jobs WHERE cv_id = ?',
+                    c.execute('UPDATE fetch_jobs SET active = 1 WHERE cv_id = ?',
                               (cv_id,))
                     if v_id in self.queued_videos:
                         self.log('[%s] Refusing to enqueue, already in queue', v_id)
@@ -180,8 +263,9 @@ class VideoFetcher:
                         cv_id,)).fetchone()
                     if exists:
                         self.log('[%s] Refusing to download, already exists', v_id)
+                        self.delete_job(c, cv_id)
                     else:
-                        self.add_job(Job(cv_id, v_id, retry))
+                        self.add_job(Job(cv_id, v_id, retry, priority))
 
             if self.process_done_queue(c):
                 need_commit = True

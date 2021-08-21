@@ -98,6 +98,7 @@ class MetadataFetcher:
         self.workers = workers
         self.max_retry = max_retry
         self.backend = YoutubeAPIBackend(YoutubeAPI(yt_api_auth))
+        self.backend.log = self.log
 
     def run(self):
         self.running = True
@@ -219,6 +220,7 @@ class MetadataFetcher:
                 needs_commit = True
                 if error:
                     self.log("[JobThread] Job error: %s", job)
+                    self.active_channels.discard(job.key)
                     self.retry_channel_fetch(c, job.key, job.retry)
                     continue
                 try:
@@ -362,11 +364,15 @@ class YoutubeAPIBackend:
         uploads = aux_data['playlist']
         latest_id = aux_data['latest_id']
         ignore = aux_data['ignore']
+        self.log("Getting videos for %s", channel_id)
         for video in self.yt.get_playlist_items(uploads):
             video_id = video['snippet']['resourceId']['videoId']
+            self.log("Got video for %s: %s", channel_id, video_id)
             if latest_id == video_id:
+                self.log("%s is latest, nothing to do", video_id)
                 return
             if video_id in ignore:
+                self.log("Ignore %s", video_id)
                 continue
             yield video_id, video['snippet']
 
@@ -384,6 +390,7 @@ class YoutubeAPIBackend:
                   (job.ch_id, video_id, video['title'],
                    video['description'], video['publishedAt']))
         cv_id = c.lastrowid
+        self.log("Did store %s as %s", video_id, cv_id)
         self.update_most_recent(c, job.aux_data['seq'] + 1, video_id, job.ch_id)
         return cv_id
 

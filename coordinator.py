@@ -55,6 +55,35 @@ def queue_candidates(db):
 
     db.commit()
 
+def queue_history(db):
+    c = db.cursor()
+    ids = set()
+    for line in open('history.txt', 'r'):
+        v_id = line.strip()
+        ids.add(v_id)
+
+    c.executemany("""
+        INSERT OR IGNORE INTO fetch_jobs (cv_id, priority)
+            SELECT cv.id, cv.duration / 60
+            FROM channel_video cv
+            JOIN channels c ON c.id = cv.ch_id
+            WHERE video_id = ?
+            -- AND c.id NOT IN (SELECT ch_id FROM ignored_channels)
+            AND c.channel_id NOT IN (
+                SELECT channel_id
+                FROM yt_archive_channels
+                WHERE channel_id is NOT NULL
+            )
+            AND c.username NOT IN (
+                SELECT username
+                FROM yt_archive_channels
+                WHERE username is NOT NULL
+            )
+            AND cv.video_id NOT IN (SELECT video_id FROM ia_video)
+            AND cv.id NOT IN (SELECT cv_id FROM stored_video)
+    """, [(i,) for i in ids])
+    db.commit()
+
 def dur_str(seconds):
     mins, secs = divmod(seconds, 60)
     hours, mins = divmod(mins, 60)
@@ -139,6 +168,8 @@ if __name__ == '__main__':
         check_files(db)
     elif action == 'fmtinfo':
         format_info(db)
+    elif action == 'queue-from-history':
+        queue_history(db)
     else:
         print("Unknown action", action)
     db.close()

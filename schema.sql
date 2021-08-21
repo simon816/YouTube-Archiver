@@ -46,6 +46,8 @@ CREATE TABLE video_meta_fetch_jobs (
 
 CREATE TABLE fetch_jobs (
     cv_id integer NOT NULL PRIMARY KEY REFERENCES channel_video(id) ON DELETE CASCADE,
+    active integer NOT NULL DEFAULT 0,
+    priority integer NOT NULL DEFAULT 1000,
     retry integer NOT NULL DEFAULT 0
 );
 

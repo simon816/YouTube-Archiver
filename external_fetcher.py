@@ -1,4 +1,4 @@
-from urllib.request import urlopen
+from urllib.request import urlopen, Request
 from urllib.parse import urlencode, urlparse, parse_qs
 from urllib.error import HTTPError
 from html.parser import HTMLParser
@@ -22,8 +22,10 @@ class LinkFetcher(HTMLParser):
             return
         self.links.append(link)
 
-def fetch_ya_monitored():
-    with urlopen('https://ya.borg.xyz/logs/dl/') as f:
+def fetch_ya_monitored(password):
+    with urlopen(Request('https://ya.borg.xyz/logs/dl/', headers={
+            'Authorization': 'Basic ' + password,
+        })) as f:
         lf = LinkFetcher()
         lf.feed(f.read().decode('utf8'))
     usernames, channel_ids = [], []
@@ -61,6 +63,7 @@ def ia_iterator(ia_query, fields, count=10_000):
         except HTTPError as e:
             print(e.read())
             raise e
+        print("Got batch of", len(data['items']))
         yield from data['items']
         cursor = query['cursor'] = data.get('cursor', None)
         if cursor is None:
@@ -92,8 +95,17 @@ def do_ia_fetch(db):
     fields = ['identifier', 'url', 'youtube-id', 'originalurl']
     c = db.cursor()
     for video_id, ia_id in filter_youtube(ia_iterator(ia_query, fields)):
-        c.execute('INSERT OR IGNORE INTO ia_video (video_id, ia_id) VALUES (?, ?)', (
-            video_id, ia_id))
+        retry = 3
+        while retry > 0:
+            try:
+                c.execute('INSERT OR IGNORE INTO ia_video (video_id, ia_id) VALUES (?, ?)', (
+                    video_id, ia_id))
+                break
+            except:
+                retry -= 1
+                if retry == 0:
+                    raise
+
     db.commit()
 
 if __name__ == '__main__':
@@ -104,7 +116,7 @@ if __name__ == '__main__':
     import sys
     action = sys.argv[1]
     if action == 'ya':
-        usernames, channel_ids = fetch_ya_monitored()
+        usernames, channel_ids = fetch_ya_monitored(config['ya_password'])
         store_ya_monitored(usernames, channel_ids, db)
     elif action == 'ia':
         do_ia_fetch(db)

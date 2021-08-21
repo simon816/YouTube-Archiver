@@ -3,7 +3,17 @@ import json
 import re
 
 def yt_dl(args):
-    return ['youtube-dl', '--cache-dir', './yt-dl-cache/'] + list(args)
+    if True: #  use yt-dlp
+        return ['yt-dlp',
+                '--cache-dir', './yt-dl-cache/',
+                '--compat-options', 'all',
+                '--extractor-args', 'youtube:player_client=android',
+                '--proxy', 'socks5://localhost:1080',
+                ] + list(args)
+    return ['youtube-dl',
+            '--cache-dir', './yt-dl-cache/',
+            '--proxy', 'socks5://localhost:1080',
+            ] + list(args)
 
 def compress_json(data):
     return zlib.compress(json.dumps(data).encode('utf8'))
