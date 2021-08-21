@@ -3,7 +3,7 @@ import sqlite3
 import os
 
 video_query = r"""
-SELECT cv1.id
+SELECT cv1.id, cv1.duration / 60
 FROM channel_video cv1
 JOIN (
     SELECT cv2.ch_id
@@ -32,7 +32,7 @@ WHERE
     ORDER BY datetime(cv1.published_at) DESC
 """
 
-insert_jobs = 'INSERT OR IGNORE INTO fetch_jobs (cv_id) '
+insert_jobs = 'INSERT OR IGNORE INTO fetch_jobs (cv_id, priority) '
 
 def video_selection_args(max_cv_count, min_cv_count, max_duration,
                          years_back=None, cv_candidate_duration=None):
@@ -46,12 +46,12 @@ def queue_candidates(db):
     # All queries check whether in IA or YA
     # Channels with less than 100 videos after subtracting videos of length > 2hr
     c.execute(insert_jobs + video_query, video_selection_args(100, 1, 60*60*2, None, 60*60*2))
-    # Channels totalling less than 200 videos where length < 30min and published not before 4 years ago
-    c.execute(insert_jobs + video_query, video_selection_args(200, 101, 60*30, 4))
-    # Channels totalling less than 300 videos where length < 20min and published not before 3 years ago
-    c.execute(insert_jobs + video_query, video_selection_args(300, 201, 60*20, 3))
-    # Channels totalling less than 3000 videos where length < 15min and published not before 2 years ago
-    c.execute(insert_jobs + video_query, video_selection_args(3000, 301, 60*15, 2))
+    # Channels totalling less than 200 videos where length < 30min
+    c.execute(insert_jobs + video_query, video_selection_args(200, 101, 60*30))
+    # Channels totalling less than 300 videos where length < 20min
+    c.execute(insert_jobs + video_query, video_selection_args(300, 201, 60*20))
+    # Channels totalling less than 3000 videos where length < 15min
+    c.execute(insert_jobs + video_query, video_selection_args(3000, 301, 60*15))
 
     db.commit()
 
@@ -61,6 +61,11 @@ def queue_history(db):
     for line in open('history.txt', 'r'):
         v_id = line.strip()
         ids.add(v_id)
+
+    for id in ids:
+        existing = c.execute('SELECT 1 FROM channel_video WHERE video_id = ?', (id,)).fetchone()
+        if not existing:
+            c.execute('INSERT OR IGNORE INTO video_fetch_jobs (video_id) VALUES (?)', (id,))
 
     c.executemany("""
         INSERT OR IGNORE INTO fetch_jobs (cv_id, priority)

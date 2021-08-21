@@ -29,6 +29,11 @@ class VideoFetcher:
         self.max_retry = max_retry
         self.format = dld_fmt
 
+    def reload(self, bandwidth, max_retry, dld_fmt):
+        self.load_settings(self.workers, bandwidth, max_retry, dld_fmt)
+        if self.running:
+            self.log("Reload config (bandwidth: %d, max_retry: %d, format: %s)", bandwidth, max_retry, dld_fmt)
+
     def run(self):
         self.running = True
         self.pool = ThreadPoolExecutor(max_workers=self.workers)
@@ -385,6 +390,19 @@ if __name__ == '__main__':
     def signal_stop(sig, stack):
         f.stop()
         db.close()
+
+    def reload(sig, stack):
+        try:
+            with open('config.json', 'r') as fh:
+                new_config = json.load(fh)
+            new_f_config = new_config['video_fetcher']
+            # n.b. cannot reload number of workers
+            f.reload(new_f_config['bandwidth'],
+                    new_f_config['max_retry'], new_f_config['format'])
+        except:
+            f.logerror('Daemon')
+
     signal.signal(signal.SIGINT, signal_stop)
     signal.signal(signal.SIGTERM, signal_stop)
+    signal.signal(signal.SIGHUP, reload)
     f.run()

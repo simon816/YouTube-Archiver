@@ -15,6 +15,8 @@ from youtube_api import YoutubeAPI, APIKeyAuthMode
 ChannelDataFetchJob = namedtuple('ChannelDataFetchJob', 'key retry')
 ChannelVideosFetchJob = namedtuple('ChannelVideosFetchJob', 'key retry ch_id aux_data')
 VideoDataFetchJob = namedtuple('VideoDataFetchJob', 'key cv_id ch_id retry')
+AdhocVideoFetchJob = namedtuple('AdhocVideoFetchJob', 'key retry')
+AdhocChannelDataFetchJob = namedtuple('AdhocChannelDataFetchJob', 'key video_data')
 
 Result = namedtuple('Result', 'value job error')
 
@@ -111,6 +113,7 @@ class MetadataFetcher:
         self.cdata_fetch_task = Task(self, self.channel_data_fetch, 50, 10)
         self.cvideo_fetch_task = Task(self, self.channel_video_fetch, 1, 0)
         self.video_fetch_task = Task(self, self.video_data_fetch, 50, 10)
+        self.adhoc_video_fetch_task = Task(self, self.adhoc_video_fetch, 1, 0) # 50, 10
         self.logger.start()
         self.jobthread.start()
 
@@ -214,24 +217,44 @@ class MetadataFetcher:
                           (cv_id,)).fetchone()
                 self.active_videos.add(cv_id)
                 self.video_fetch_task.add(VideoDataFetchJob(video_id, cv_id, ch_id, retry))
-                
+
+            for video_id, retry in self.pop_from_db_queue(c, 'video_id', 'video_fetch_jobs'):
+                needs_commit = True
+                exists = c.execute('SELECT id FROM channel_video WHERE video_id = ?',
+                        (video_id,)).fetchone()
+                if exists:
+                    self.log('[%s] Refusing to enqueue, already fetched', video_id)
+                    continue
+                self.adhoc_video_fetch_task.add(AdhocVideoFetchJob(video_id, retry))
 
             for data, job, error in self.cdata_fetch_task.process(sleep):
                 needs_commit = True
+                is_adhoc = isinstance(job, AdhocChannelDataFetchJob)
                 if error:
                     self.log("[JobThread] Job error: %s", job)
-                    self.active_channels.discard(job.key)
-                    self.retry_channel_fetch(c, job.key, job.retry)
+                    if not is_adhoc:
+                        self.active_channels.discard(job.key)
+                        self.retry_channel_fetch(c, job.key, job.retry)
                     continue
                 try:
                     self.log("[%s] Store channel data", job.key)
-                    ch_id = self.backend.store_channel_data(c, data, job)
+                    ch_id = self.backend.store_channel_data(c, data)
                 except:
                     self.logerror(job.key)
-                    self.retry_channel_fetch(c, job.key, job.retry)
+                    if not is_adhoc:
+                        self.retry_channel_fetch(c, job.key, job.retry)
                     continue
-                # Got the channel data, now enqueue channel video fetch
-                self.add_channel_video_fetch(c, ch_id, job.key, job.retry)
+                if is_adhoc:
+                    # Got the channel data, now insert the adhoc video
+                    video_id, snippet, details = job.video_data
+                    try:
+                        self.store_adhoc_video(c, video_id, ch_id, snippet, details)
+                    except:
+                        self.logerror(video_id)
+                        self.retry_adhoc_video_fetch(c, video_id, 0)
+                else:
+                    # Got the channel data, now enqueue channel video fetch
+                    self.add_channel_video_fetch(c, ch_id, job.key, job.retry)
 
             for data, job, error in self.cvideo_fetch_task.process(sleep):
                 needs_commit = True
@@ -252,7 +275,7 @@ class MetadataFetcher:
                 logkey = job.key + ':' + video_id
                 try:
                     self.log("[%s] Storing channel video", logkey)
-                    cv_id = self.backend.store_channel_video(c, data, job)
+                    cv_id = self.backend.store_channel_video_for_job(c, data, job)
                 except:
                     self.logerror(logkey)
                     self.backend.partial_cv_fail(c, job)
@@ -270,10 +293,25 @@ class MetadataFetcher:
                     continue
                 try:
                     self.log("[%s] Storing additional video data", job.key)
-                    self.backend.store_additional_video_data(c, data, job)
+                    self.backend.store_additional_video_data(c, data, job.cv_id)
                 except:
                     self.logerror(job.key)
                     self.retry_video_fetch(c, job.cv_id, job.retry)
+
+            for data, job, error in self.adhoc_video_fetch_task.process(sleep):
+                if error:
+                    self.log('[JobThread] Job error: %s', job)
+                    needs_commit = True
+                    self.retry_adhoc_video_fetch(c, job.key, job.retry)
+                    continue
+                snippet, details = data
+                try:
+                    did_store = self.maybe_store_adhoc(c, job.key, snippet, details)
+                    if did_store:
+                        needs_commit = True
+                except:
+                    self.logerror(job.key)
+                    self.retry_adhoc_video_fetch(c, job.key, job.retry)
 
             if needs_commit:
                 try:
@@ -288,6 +326,9 @@ class MetadataFetcher:
         aux = self.backend.get_aux_channel_data(c, ch_id)
         self.cvideo_fetch_task.add(ChannelVideosFetchJob(channel_id, retry, ch_id, aux))
 
+    def add_adhoc_channel_fetch(self, channel_id, video_data):
+        self.cdata_fetch_task.add(AdhocChannelDataFetchJob(channel_id, video_data))
+
     def retry_channel_fetch(self, c, channel_id, retry_count):
         c.execute('INSERT OR IGNORE INTO channel_fetch_jobs (channel_id, retry) VALUES (?, ?)',
                   (channel_id, retry_count + 1))
@@ -295,6 +336,10 @@ class MetadataFetcher:
     def retry_video_fetch(self, c, cv_id, retry_count):
         c.execute('INSERT OR IGNORE INTO video_meta_fetch_jobs (cv_id, retry) VALUES (?, ?)',
                   (cv_id, retry_count + 1))
+
+    def retry_adhoc_video_fetch(self, c, video_id, retry_count):
+        c.execute('INSERT OR IGNORE INTO video_fetch_jobs (video_id, retry) VALUES (?, ?)',
+                  (video_id, retry_count + 1))
 
     def channel_data_fetch(self, channel_jobs):
         self.log("Fetching %d channels", len(channel_jobs))
@@ -317,6 +362,27 @@ class MetadataFetcher:
         for id, data in self.backend.get_additional_video_data(jobs.keys()):
             yield data, jobs[id]
 
+    def adhoc_video_fetch(self, video_jobs):
+        jobs = {j.key: j for j in video_jobs}
+        for id, snippet, details in self.backend.get_full_video_data(jobs.keys()):
+            yield (snippet, details), jobs[id]
+
+    def maybe_store_adhoc(self, c, video_id, snippet, details):
+        channel = c.execute('SELECT id FROM channels WHERE channel_id = ?', (
+            snippet['channelId'],)).fetchone()
+        if not channel:
+            self.log("[%s] Queuing channel fetch: %s", video_id, snippet['channelId'])
+            self.add_adhoc_channel_fetch(snippet['channelId'], (video_id, snippet, details))
+            return False
+        ch_id, = channel
+        self.log("[%s] Storing adhoc video", video_id)
+        self.store_adhoc_video(c, video_id, ch_id, snippet, details)
+        return True
+
+    def store_adhoc_video(self, c, video_id, ch_id, snippet, details):
+        cv_id = self.backend.store_channel_video(c, video_id, snippet, ch_id)
+        self.backend.store_additional_video_data(c, details, cv_id)
+
 class YoutubeAPIBackend:
 
     def __init__(self, api_client):
@@ -327,7 +393,7 @@ class YoutubeAPIBackend:
                      self.yt.get_channel_datas, 'snippet', 'contentDetails'):
             yield data['id'], data
 
-    def store_channel_data(self, c, data, job):
+    def store_channel_data(self, c, data):
         c_id = data['id']
         sn = data['snippet']
         cust_url = sn['customUrl'] if 'customUrl' in sn else None
@@ -382,16 +448,26 @@ class YoutubeAPIBackend:
         aux = job.aux_data
         self.update_most_recent(c, aux['seq'] + 2, aux['latest_id'], job.ch_id)
 
-    def store_channel_video(self, c, data, job):
+    def store_channel_video_for_job(self, c, data, job):
         video_id, video = data
-        c.execute('INSERT INTO channel_video (ch_id, video_id, title, \
-                                              description, published_at) \
-                                              VALUES (?, ?, ?, ?, ?)',
-                  (job.ch_id, video_id, video['title'],
-                   video['description'], video['publishedAt']))
+        self.store_channel_video(c, video_id, video, job.ch_id)
+        self.update_most_recent(c, job.aux_data['seq'] + 1, video_id, job.ch_id)
+
+    def store_channel_video(self, c, video_id, video, ch_id):
+        try:
+            c.execute('INSERT INTO channel_video (ch_id, video_id, title, \
+                                                  description, published_at) \
+                                                  VALUES (?, ?, ?, ?, ?)',
+                      (ch_id, video_id, video['title'],
+                       video['description'], video['publishedAt']))
+        except sqlite3.IntegrityError as e:
+            if e.args[0].find('UNIQUE constraint failed: channel_video.video_id') != -1:
+                cv_id, = c.execute('SELECT id FROM channel_video WHERE video_id = ?', (video_id,)).fetchone()
+                self.log("Already stored %s as %s", video_id, cv_id)
+                return cv_id
+            raise
         cv_id = c.lastrowid
         self.log("Did store %s as %s", video_id, cv_id)
-        self.update_most_recent(c, job.aux_data['seq'] + 1, video_id, job.ch_id)
         return cv_id
 
     def update_most_recent(self, c, seq, video_id, ch_id):
@@ -405,14 +481,18 @@ class YoutubeAPIBackend:
         for video in self.yt.get_videos(video_ids, 'contentDetails'):
             yield video['id'], video['contentDetails']
 
-    def store_additional_video_data(self, c, data, job):
+    def store_additional_video_data(self, c, data, cv_id):
         duration = iso8601_duration_as_seconds(data['duration'])
         c.execute('UPDATE channel_video SET duration = ? WHERE id = ?', (
-            duration, job.cv_id))
+            duration, cv_id))
         # TODO should upsert instead of ignore
         c.execute('INSERT OR IGNORE INTO api_video_details (cv_id, compressed_json) \
                    VALUES (?, ?)',
-                  (job.cv_id, compress_json(data)))
+                  (cv_id, compress_json(data)))
+
+    def get_full_video_data(self, video_ids):
+        for video in self.yt.get_videos(video_ids, 'snippet,contentDetails'):
+            yield video['id'], video['snippet'], video['contentDetails']
 
 if __name__ == '__main__':
     with open('config.json', 'r') as f:
