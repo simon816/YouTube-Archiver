@@ -46,6 +46,8 @@ class VideoFetcher:
         self.logger.start()
         self.jobthread.start()
 
+        self.jobthread.join()
+
     def stop(self):
         self.log("Stopping")
         self.running = False
