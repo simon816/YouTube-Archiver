@@ -10,6 +10,7 @@ copy($$("#main-link.channel-link").map(e => (sp = e.href.split('/'), sp[sp.lengt
 def queue_all_ids(db, channel_ids):
     c = db.cursor()
     for channel_id in channel_ids:
+        c.execute('INSERT OR IGNORE INTO subs (ch_id) VALUES (?)', (channel_id,))
         c.execute('INSERT OR IGNORE INTO channel_fetch_jobs (channel_id) VALUES (?)', (
             channel_id,))
     db.commit()

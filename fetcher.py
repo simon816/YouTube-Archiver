@@ -282,7 +282,7 @@ class VideoFetcher:
                 except:
                     retry_commit = True
                     self.logerror('JobThread')
-            time.sleep(0.5)
+            time.sleep(10)
 
     def add_job(self, job):
         f_id = self.next_f_id

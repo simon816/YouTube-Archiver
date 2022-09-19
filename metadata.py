@@ -175,19 +175,28 @@ class MetadataFetcher:
         self.log("Job thread exited")
 
     def pop_from_db_queue(self, c, id_field, table):
-        items = c.execute('SELECT %s, retry FROM %s WHERE retry < ?' % (id_field, table),
-                          (self.max_retry,)).fetchall()
+        try:
+            items = c.execute('SELECT %s, retry FROM %s WHERE retry < ?' % (id_field, table),
+                              (self.max_retry,)).fetchall()
+        except:
+            self.logerror('main_loop')
+            items = []
         if items:
             self.log("Popping %d items from %s", len(items), table)
 
         for key, retry in items:
-            c.execute('DELETE FROM %s WHERE %s = ?' % (table, id_field), (key,))
-            yield key, retry
+            try:
+                c.execute('DELETE FROM %s WHERE %s = ?' % (table, id_field), (key,))
+                yield key, retry
+            except GeneratorExit:
+                return
+            except:
+                self.logerror('main_loop')
 
     def main_loop(self):
         self.log("Begin polling")
         retry_commit = False
-        sleep = 0.5
+        sleep = 10
         while self.running:
             c = self.db.cursor()
             needs_commit = retry_commit

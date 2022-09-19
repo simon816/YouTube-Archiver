@@ -1,6 +1,8 @@
 import json
 import sqlite3
 import os
+import sys
+import traceback
 
 video_query = r"""
 SELECT cv1.id, cv1.duration / 60
@@ -32,6 +34,21 @@ WHERE
     ORDER BY datetime(cv1.published_at) DESC
 """
 
+remaining_query = r"""
+SELECT cv.id, IFNULL(cv.duration / 60, 0)
+FROM channel_video cv
+join channels c on ch_id = c.id
+join subs using (channel_id)
+where
+    not exists(select 1 from stored_video sv where cv_id = cv.id)
+    and cv.ch_id not in (select ch_id from ignored_channels)
+    and channel_id not in (select channel_id from yt_archive_channels where channel_id is not null)
+    and username not in (select username from yt_archive_channels where username is not null)
+    and cv.id not in (select cv_id from fetch_jobs)
+    and video_id not in (select video_id from ia_video)
+    and datetime(cv.published_at) < datetime('now', '-6 hours')
+"""
+
 insert_jobs = 'INSERT OR IGNORE INTO fetch_jobs (cv_id, priority) '
 
 def video_selection_args(max_cv_count, min_cv_count, max_duration,
@@ -44,6 +61,7 @@ def video_selection_args(max_cv_count, min_cv_count, max_duration,
 def queue_candidates(db):
     c = db.cursor()
     # All queries check whether in IA or YA
+    """
     # Channels with less than 100 videos after subtracting videos of length > 2hr
     c.execute(insert_jobs + video_query, video_selection_args(100, 1, 60*60*2, None, 60*60*2))
     # Channels totalling less than 200 videos where length < 30min
@@ -51,9 +69,38 @@ def queue_candidates(db):
     # Channels totalling less than 300 videos where length < 20min
     c.execute(insert_jobs + video_query, video_selection_args(300, 201, 60*20))
     # Channels totalling less than 3000 videos where length < 15min
-    c.execute(insert_jobs + video_query, video_selection_args(3000, 301, 60*15))
+    c.execute(insert_jobs + video_query, video_selection_args(3000, 1, 60*15))
+    """
+
+    c.execute(insert_jobs + remaining_query)
 
     db.commit()
+
+def cron_job(db):
+    c = db.cursor()
+
+    print("Subscription update")
+    retry = 0
+    while retry < 3:
+        try:
+            c.execute('UPDATE channel_fetch_jobs SET retry = 0')
+            c.execute('INSERT OR IGNORE INTO channel_fetch_jobs (channel_id) SELECT channel_id FROM subs')
+            db.commit()
+            break
+        except:
+            traceback.print_exc()
+            retry += 1
+
+    print("Video download")
+    retry = 0
+    while retry < 10:
+        try:
+            queue_candidates(db)
+            break
+        except:
+            traceback.print_exc()
+            retry += 1
+
 
 def queue_history(db):
     c = db.cursor()
@@ -100,12 +147,20 @@ def stats(db):
     total_size = 0
     total_dur = 0
     max_dur = 0
+    max_size = 0
+    max_dur_file = ''
+    max_size_file = ''
     for filename, duration in allfetched:
         path = os.path.join('/media/bd/sinkhole/YouTube/', filename)
         size = os.path.getsize(path)
         total_size += size
         total_dur += duration
         max_dur = max(duration, max_dur)
+        max_size = max(size, max_size)
+        if max_dur == duration:
+            max_dur_file = filename
+        if max_size == size:
+            max_size_file = filename
     count = len(allfetched)
 
     print('Total size: %.1fGB' % (total_size / 1024 / 1024 / 1024))
@@ -115,7 +170,8 @@ def stats(db):
     print('Average duration per video: %s' % dur_str(total_dur // count))
     print('Average data per second: %.2fKB/s' % (total_size / total_dur / 1024))
     print('Average seconds per megabyte: %.2fs/MB' % (total_dur / (total_size / 1024 / 1024)))
-    print('Longest video: %s' % dur_str(max_dur))
+    print('Longest video: %s (%s)' % (dur_str(max_dur), max_dur_file))
+    print('Largest video: %.1fGB (%s)' % ((max_size / 1024 / 1024 / 1024), max_size_file))
 
 def check_files(db):
     c = db.cursor()
@@ -163,7 +219,6 @@ if __name__ == '__main__':
         config = json.load(f)
     db = sqlite3.connect(config['database']['file'], check_same_thread=False)
     db.execute('PRAGMA foreign_keys = ON')
-    import sys
     action = sys.argv[1]
     if action == 'stats':
         stats(db)
@@ -175,6 +230,8 @@ if __name__ == '__main__':
         format_info(db)
     elif action == 'queue-from-history':
         queue_history(db)
+    elif action == 'cron':
+        cron_job(db)
     else:
         print("Unknown action", action)
     db.close()
