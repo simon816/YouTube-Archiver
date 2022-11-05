@@ -10,6 +10,12 @@ import glob
 import os
 from collections import namedtuple
 
+try:
+    import systemd.daemon
+    use_systemd = True
+except ImportError:
+    use_systemd = False
+
 from logger import ThreadsafeLogger
 from utils import yt_dl, compress_json
 
@@ -285,6 +291,8 @@ class VideoFetcher:
                     retry_commit = True
                     self.logerror('JobThread')
             time.sleep(10)
+            if use_systemd:
+                systemd.daemon.notify('WATCHDOG=1')
 
     def add_job(self, job):
         f_id = self.next_f_id

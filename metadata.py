@@ -8,6 +8,12 @@ import sqlite3
 import signal
 from collections import namedtuple
 
+try:
+    import systemd.daemon
+    use_systemd = True
+except ImportError:
+    use_systemd = False
+
 from logger import ThreadsafeLogger
 from utils import yt_dl, compress_json, iso8601_duration_as_seconds
 from youtube_api import YoutubeAPI, APIKeyAuthMode
@@ -332,6 +338,8 @@ class MetadataFetcher:
                     retry_commit = True
                     self.logerror('JobThread')
             time.sleep(sleep)
+            if use_systemd:
+                systemd.daemon.notify('WATCHDOG=1')
     
     def add_channel_video_fetch(self, c, ch_id, channel_id, retry):
         aux = self.backend.get_aux_channel_data(c, ch_id)
