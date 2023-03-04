@@ -347,6 +347,7 @@ class VideoFetcher:
                 '-4',
                 '--limit-rate', str(self.rate_limit),
                 '--no-progress',
+                '--paths', 'temp:/tmp',
                 '--output', outfmt,
                 '--format', self.format,
                 '--ignore-errors',
