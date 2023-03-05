@@ -95,7 +95,9 @@ class VideoFetcher:
 
     def post_process(self, result, c):
         job = result['job']
-        del self.queued_videos[job.v_id]
+        # Delete (if exists) - might not exist if job was cancelled
+        # we'll process the job anyway even if cancelled
+        self.queued_videos.pop(job.v_id, 0)
         if result['error']:
             self.re_queue(result, c)
         else:
@@ -235,7 +237,7 @@ class VideoFetcher:
 
         if self.queued_videos:
             self.log("Requeuing unfinished jobs")
-            for job in list(self.queued_videos.values()):
+            for (job, f_id) in list(self.queued_videos.values()):
                 self.re_queue_job(job, c)
             self.queued_videos = {}
 
@@ -254,6 +256,7 @@ class VideoFetcher:
     def main_loop(self):
         self.log("Begin polling")
         retry_commit = False
+        reconcile_queue_ticks = 0
         Q = 'SELECT v.id, v.video_id, priority, retry FROM fetch_jobs JOIN channel_video v ON v.id = cv_id WHERE active = 0 AND retry < ? ORDER BY priority'
         while self.running:
             c = self.db.cursor()
@@ -283,6 +286,33 @@ class VideoFetcher:
             if self.process_done_queue(c):
                 need_commit = True
 
+            # Periodically check the database for supposed "active" jobs
+            # cancel any that are not active, and clear the active flag if we're not processing it
+            reconcile_queue_ticks += 1
+            # 2 minutes (12 * 10 second sleep)
+            if reconcile_queue_ticks > 12:
+                try:
+                    rows = c.execute('SELECT cv_id, v.video_id FROM fetch_jobs JOIN channel_video v ON v.id = cv_id WHERE active = 1').fetchall()
+                except:
+                    rows = []
+                    self.logerror('JobThread')
+                inactive = []
+                for cv_id, v_id in rows:
+                    if v_id not in self.queued_videos:
+                        self.log("[%s] job incorrectly marked as active", v_id)
+                        inactive.append(cv_id)
+                db_active = set(r[1] for r in rows)
+                for v_id in list(self.queued_videos.keys()):
+                    if v_id not in db_active:
+                        self.log("[%s] Job missing from database, cancelling", v_id)
+                        self.cancel_job(v_id)
+
+                if inactive:
+                    c.executemany('UPDATE fetch_jobs SET active = 0 WHERE cv_id = ?', [(ch_id,) for ch_id in inactive])
+                    needs_commit = True
+
+                reconcile_queue_ticks = 0
+
             if need_commit:
                 try:
                     self.db.commit()
@@ -297,9 +327,19 @@ class VideoFetcher:
     def add_job(self, job):
         f_id = self.next_f_id
         self.next_f_id += 1
-        self.queued_videos[job.v_id] = job
+        self.queued_videos[job.v_id] = (job, f_id)
         future = self.pool.submit(self.try_download_video, f_id, job)
         self.futures[f_id] = future
+
+    def cancel_job(self, v_id):
+        q = self.queued_videos.get(v_id)
+        if q is not None:
+            job, f_id = q
+            future = self.futures.get(f_id)
+            if future is not None:
+                if future.cancel():
+                    self.futures.pop(f_id, 0)
+            self.queued_videos.pop(v_id, 0)
 
     def process_done_queue(self, c):
         need_commit = False
@@ -323,6 +363,10 @@ class VideoFetcher:
             self.log("[%s] %s", v_id, line)
 
     def try_download_video(self, f_id, job):
+        if job.v_id not in self.queued_videos:
+            self.log("[%s] Download job cancelled", job.v_id)
+            return
+
         if not self.jobthread.is_alive() or not self.running:
             self.log("[%s] Job thread died", job.v_id)
             del self.futures[f_id]
