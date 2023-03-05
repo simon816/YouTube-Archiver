@@ -11,17 +11,8 @@ JOIN (
     SELECT cv2.ch_id
     FROM channel_video cv2
     JOIN channels c ON c.id = cv2.ch_id
-    WHERE c.channel_id NOT IN (
-        SELECT channel_id
-        FROM yt_archive_channels
-        WHERE channel_id is NOT NULL
-    ) 
-    AND c.username NOT IN (
-        SELECT username
-        FROM yt_archive_channels
-        WHERE username is NOT NULL
-    )
-    AND c.id NOT IN (SELECT ch_id FROM ignored_channels)
+    JOIN subs USING (channel_id)
+    WHERE c.id NOT IN (SELECT ch_id FROM ignored_channels)
     AND (? OR cv2.duration < ?)
     GROUP BY cv2.ch_id 
     HAVING count(cv2.id) <= ? AND count(cv2.id) >= ?
@@ -60,8 +51,8 @@ def video_selection_args(max_cv_count, min_cv_count, max_duration,
 
 def queue_candidates(db):
     c = db.cursor()
-    # All queries check whether in IA or YA
-    """
+    # All queries check whether in IA
+
     # Channels with less than 100 videos after subtracting videos of length > 2hr
     c.execute(insert_jobs + video_query, video_selection_args(100, 1, 60*60*2, None, 60*60*2))
     # Channels totalling less than 200 videos where length < 30min
@@ -69,8 +60,7 @@ def queue_candidates(db):
     # Channels totalling less than 300 videos where length < 20min
     c.execute(insert_jobs + video_query, video_selection_args(300, 201, 60*20))
     # Channels totalling less than 3000 videos where length < 15min
-    c.execute(insert_jobs + video_query, video_selection_args(3000, 1, 60*15))
-    """
+    c.execute(insert_jobs + video_query, video_selection_args(3000, 301, 60*15))
 
     c.execute(insert_jobs + remaining_query)
 
