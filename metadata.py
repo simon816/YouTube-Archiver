@@ -193,13 +193,8 @@ class MetadataFetcher:
             self.log("Popping %d items from %s", len(items), table)
 
         for key, retry in items:
-            try:
-                c.execute('DELETE FROM %s WHERE %s = ?' % (table, id_field), (key,))
-                yield key, retry
-            except GeneratorExit:
-                return
-            except:
-                self.logerror('main_loop')
+            c.execute('DELETE FROM %s WHERE %s = ?' % (table, id_field), (key,))
+            yield key, retry
 
     def main_loop(self):
         self.log("Begin polling")
