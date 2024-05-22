@@ -110,17 +110,6 @@ def queue_history(db):
             FROM channel_video cv
             JOIN channels c ON c.id = cv.ch_id
             WHERE video_id = ?
-            -- AND c.id NOT IN (SELECT ch_id FROM ignored_channels)
-            AND c.channel_id NOT IN (
-                SELECT channel_id
-                FROM yt_archive_channels
-                WHERE channel_id is NOT NULL
-            )
-            AND c.username NOT IN (
-                SELECT username
-                FROM yt_archive_channels
-                WHERE username is NOT NULL
-            )
             AND cv.video_id NOT IN (SELECT video_id FROM ia_video)
             AND cv.id NOT IN (SELECT cv_id FROM stored_video)
     """, [(i,) for i in ids])
@@ -130,6 +119,9 @@ def dur_str(seconds):
     mins, secs = divmod(seconds, 60)
     hours, mins = divmod(mins, 60)
     return '%d:%d:%d' % (hours, mins, secs)
+
+LFS_CHANNELS = [
+]
 
 def stats(db):
     c = db.cursor()
@@ -141,11 +133,16 @@ def stats(db):
     max_dur_file = ''
     max_size_file = ''
     for filename, duration in allfetched:
-        path = os.path.join('/media/bd/sinkhole/YouTube/', filename)
+        if any(filename.startswith('Videos/%s/' % channel) for channel in LFS_CHANNELS):
+            filename = filename[len('Videos/'):]
+            path = os.path.join('/media/md/sinkhole/YouTubeArchive/', filename)
+        else:
+            path = os.path.join('/media/bd/sinkhole/YouTube/', filename)
         size = os.path.getsize(path)
         total_size += size
-        total_dur += duration
-        max_dur = max(duration, max_dur)
+        if duration is not None:
+            total_dur += duration
+            max_dur = max(duration, max_dur)
         max_size = max(size, max_size)
         if max_dur == duration:
             max_dur_file = filename

@@ -298,7 +298,10 @@ class MetadataFetcher:
 
             for data, job, error in self.video_fetch_task.process(sleep):
                 needs_commit = True
-                self.active_videos.remove(job.cv_id)
+                if job.cv_id in self.active_videos:
+                    self.active_videos.remove(job.cv_id)
+                else:
+                    self.log("[%s] Video already removed from active_videos??", job.key)
                 if error:
                     self.log("[JobThread] Job error: %s", job)
                     self.retry_video_fetch(c, job.cv_id, job.retry)
@@ -306,6 +309,7 @@ class MetadataFetcher:
                 try:
                     self.log("[%s] Storing additional video data", job.key)
                     self.backend.store_additional_video_data(c, data, job.cv_id)
+                    self.db.commit()
                 except:
                     self.logerror(job.key)
                     self.retry_video_fetch(c, job.cv_id, job.retry)
