@@ -7,7 +7,6 @@ def yt_dl(args):
         return ['yt-dlp',
                 '--cache-dir', './yt-dl-cache/',
                 '--compat-options', 'all',
-                '--extractor-args', 'youtube:player_client=android',
                 ] + list(args)
     return ['youtube-dl',
             '--cache-dir', './yt-dl-cache/',
