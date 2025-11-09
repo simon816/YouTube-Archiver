@@ -7,6 +7,7 @@ def yt_dl(args):
         return ['yt-dlp',
                 '--cache-dir', './yt-dl-cache/',
                 '--compat-options', 'all',
+                '--cookies', './cookies.txt',
                 ] + list(args)
     return ['youtube-dl',
             '--cache-dir', './yt-dl-cache/',
