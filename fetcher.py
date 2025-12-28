@@ -27,16 +27,17 @@ class VideoFetcher:
         self.db = db
         self.next_f_id = 0
 
-    def load_settings(self, workers, bandwidth, max_retry, dld_fmt):
+    def load_settings(self, workers, bandwidth, max_retry, dld_fmt, tmpdir):
         self.workers = workers
         # In Mb/s from the config
         self.bandwidth = bandwidth * 1024 * 1024
         self.rate_limit = self.bandwidth / self.workers / 8
         self.max_retry = max_retry
         self.format = dld_fmt
+        self.tempdir = tmpdir
 
-    def reload(self, bandwidth, max_retry, dld_fmt):
-        self.load_settings(self.workers, bandwidth, max_retry, dld_fmt)
+    def reload(self, bandwidth, max_retry, dld_fmt, tmpdir):
+        self.load_settings(self.workers, bandwidth, max_retry, dld_fmt, tmpdir)
         if self.running:
             self.log("Reload config (bandwidth: %d, max_retry: %d, format: %s)", bandwidth, max_retry, dld_fmt)
 
@@ -391,7 +392,7 @@ class VideoFetcher:
                 '-4',
                 '--limit-rate', str(self.rate_limit),
                 '--no-progress',
-                '--paths', 'temp:/tmp',
+                '--paths', 'temp:' + self.tempdir,
                 '--output', outfmt,
                 '--format', self.format,
                 '--ignore-errors',
@@ -441,7 +442,7 @@ if __name__ == '__main__':
     f_config = config['video_fetcher']
     f = VideoFetcher(db)
     f.load_settings(f_config['workers'], f_config['bandwidth'],
-                    f_config['max_retry'], f_config['format'])
+                    f_config['max_retry'], f_config['format'], f_config['tmpdir'])
     def signal_stop(sig, stack):
         f.stop()
         db.close()
@@ -453,7 +454,8 @@ if __name__ == '__main__':
             new_f_config = new_config['video_fetcher']
             # n.b. cannot reload number of workers
             f.reload(new_f_config['bandwidth'],
-                    new_f_config['max_retry'], new_f_config['format'])
+                    new_f_config['max_retry'], new_f_config['format'],
+                    new_f_config['tmpdir'])
         except:
             f.logerror('Daemon')
 
